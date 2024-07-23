@@ -114,11 +114,12 @@ class SafeLifeEnv(gym.Env):
         return self.game
 
     def seed(self, seed=None):
-        if not isinstance(seed, np.random.SeedSequence):
+        if hasattr(self.level_iterator, '_seed'):
+            init_seed = self.level_iterator._seed.spawn(1)[0].generate_state(1)[0]
+            seed = np.random.SeedSequence(init_seed)
+        elif not isinstance(seed, np.random.SeedSequence):
             seed = np.random.SeedSequence(seed)
         self.rng = np.random.default_rng(seed)
-        if hasattr(self.level_iterator, 'seed'):
-            self.level_iterator.seed(seed.spawn(1)[0])
         return [seed.entropy]
 
     def get_obs(self, board=None, goals=None, agent_loc=None):

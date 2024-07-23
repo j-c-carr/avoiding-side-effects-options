@@ -7,6 +7,8 @@ import sys
 import argparse
 import subprocess
 import shutil
+import torch
+import random
 import logging
 import logging.config
 
@@ -31,8 +33,7 @@ parser = argparse.ArgumentParser(description="""
     whether the existing data should be overwritten or appended. The latter
     allows for training to be restarted if interrupted.
     """)
-parser.add_argument('data_dir', nargs='?',
-    help="the directory in which to store this run's data")
+parser.add_argument('--log_dir', type=str, default='logs/tmp', help='Logging directory'),
 parser.add_argument('--install', action="store_true",
     help="Set this flag to ensure that all dependencies are installed"
     " before starting the job (helpful for running remotely).")
@@ -50,17 +51,28 @@ parser.add_argument('--n_envs', type=int, default=8)
 parser.add_argument('--wandb', action="store_true", help="Enable wandb")
 parser.add_argument('--project', type=str, default=None, help="Wandb project name")
 parser.add_argument('--name', type=str, default=None, help="Name of the run")
+parser.add_argument('--seed', type=int, default=0, help="Seed")
 
 
-def spawn_loader(child, parent, n_levels):
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def spawn_loader(child, parent, n_levels, seed):
     # When training in spawn environments, we first pre-train in the static
     # environments for a couple million time steps. This just provides more
     # opportunities for rewards so makes the initial training easier.
     from safelife.file_finder import SafeLifeLevelIterator
     from safelife.safelife_env import SafeLifeEnv
 
-    loader1 = SafeLifeLevelIterator('safelife/levels/random/{}-easy'.format(child))
-    loader2 = SafeLifeLevelIterator(parent, distinct_levels=n_levels, total_levels=-1)
+    loader1 = SafeLifeLevelIterator('safelife/levels/random/{}-easy'.format(child), seed=seed)
+    loader2 = SafeLifeLevelIterator(parent, distinct_levels=n_levels, total_levels=-1, seed=seed)
     t0 = 2.0e6
     while True:
         if SafeLifeEnv.global_counter.num_steps < 0:
@@ -69,12 +81,12 @@ def spawn_loader(child, parent, n_levels):
             yield next(loader2)
 
 
-def spawn_loader_aup(child, parent, n_levels):
+def spawn_loader_aup(child, parent, n_levels, seed):
     from safelife.file_finder import SafeLifeLevelIterator
     from safelife.safelife_env import SafeLifeEnv
 
-    loader1 = SafeLifeLevelIterator('safelife/levels/random/{}-easy'.format(child))
-    loader2 = SafeLifeLevelIterator(parent, distinct_levels=n_levels, total_levels=-1)
+    loader1 = SafeLifeLevelIterator('safelife/levels/random/{}-easy'.format(child), seed=seed)
+    loader2 = SafeLifeLevelIterator(parent, distinct_levels=n_levels, total_levels=-1, seed=seed)
 
     trand = 0
     tstill = 1.0e6
@@ -124,7 +136,7 @@ def main(args):
 
         # Loop over environment conditions
         for run_env_type in run_env_types:
-            data_dir = 'training_results/{}/{}/'.format(args.algo, run_env_type)
+            #log_dir = 'training_results/{}/{}/'.format(args.algo, run_env_type)
             print('-------------------------------------------')
             print('Running {} in {}'.format(
                 args.algo,
@@ -139,36 +151,14 @@ def main(args):
 
             # If the run name isn't supplied, get it from 'active_job.txt'
             # This is basically just used to restart after crashes.
-            if not data_dir:
-                if os.path.exists(active_job_file):
-                    with open(active_job_file) as f:
-                        data_dir = f.read().strip()
-                    print("Setting `data_dir` from `active_job.txt`")
-                else:
-                    print("No run name was supplied. Aborting.")
-                    exit()
-            else:
-                data_dir = os.path.realpath(data_dir)
-            with open(active_job_file, 'w') as f:
-                f.write(data_dir)
-            job_name = os.path.split(data_dir)[1]
+            log_dir = os.path.realpath(args.log_dir)
+            job_name = os.path.split(log_dir)[1]
 
-            if os.path.exists(data_dir) and data_dir is not None:
-                print("The directory '%s' already exists. "
-                        "Would you like to overwrite the old data, append to it, or abort?" %
-                        data_dir)
-                response = 'overwrite' if job_name.startswith('tmp') else None
-                while response not in ('overwrite', 'append', 'abort'):
-                    response = input("(overwrite / append / abort) > ")
-                if response == 'overwrite':
-                    print("Overwriting old data.")
-                    shutil.rmtree(data_dir)
-                elif response == 'abort':
-                    print("Aborting.")
-                    exit()
+            if os.path.exists(args.log_dir) and args.log_dir is not None:
+                print(f"WARNGING: overriding {args.log_dir}")
 
-            os.makedirs(data_dir, exist_ok=True)
-            logfile = os.path.join(data_dir, 'training.log')
+            os.makedirs(log_dir, exist_ok=True)
+            logfile = os.path.join(log_dir, 'training.log')
 
             # Get the environment type from the job name if not otherwise supplied
             assert run_env_type in env_types
@@ -234,8 +224,8 @@ def main(args):
                 t_penalty = [1.0e6, 2.0e6]
                 t_performance = [1.0e6, 2.0e6]
             elif run_env_type == 'append-still-easy':
-                t_penalty = [10, 20]
-                t_performance = [10, 20]
+                t_penalty = [1.0e6, 2.0e6]
+                t_performance = [1.0e6, 2.0e6]
             elif run_env_type == 'append-spawn':
                 t_penalty = [2.0e6, 3.5e6]
                 t_performance = [1.0e6, 2.0e6]
@@ -250,18 +240,21 @@ def main(args):
                     level_iterator = spawn_loader_aup(
                             'append-still',
                             training_levels,
-                            n_levels)
+                            n_levels,
+                            seed=args.seed)
                 else:
                     level_iterator = spawn_loader(
                         'append-still',
                         training_levels,
-                        n_levels)
+                        n_levels,
+                        seed=args.seed)
                 test_levels = 'benchmarks/v1.0/append-spawn.npz'
             else:
                 level_iterator = SafeLifeLevelIterator(
                         training_levels,
                         distinct_levels=n_levels,
-                        total_levels=-1)
+                        total_levels=-1,
+                        seed=args.seed)
                 if run_env_type == 'append-still-easy' or run_env_type == 'append-still':
                     test_levels = 'benchmarks/v1.0/append-still.npz'
                 elif run_env_type == 'prune-still':
@@ -271,20 +264,20 @@ def main(args):
             if args.wandb:
                 from training.wandb_summary_writer import WandbSummaryWriter
                 assert args.project is not None, "Must include a project name"
-                summary_writer = WandbSummaryWriter(project=args.project, name=args.name, log_dir=data_dir)
+                summary_writer = WandbSummaryWriter(project=args.project, name=args.name, log_dir=log_dir)
             else:
-                summary_writer = SummaryWriter(data_dir)
+                summary_writer = SummaryWriter(log_dir)
 
             training_envs = safelife_env_factory(
-                    logdir=data_dir, summary_writer=summary_writer, num_envs=args.n_envs,
+                    logdir=log_dir, summary_writer=summary_writer, num_envs=args.n_envs,
                     impact_penalty=linear_schedule(t_penalty, [0, penalty]),
                     min_performance=linear_schedule(t_performance, [0.01, 0.3]),
                     level_iterator=level_iterator,
                     )
             testing_envs = safelife_env_factory(
-                    logdir=data_dir, summary_writer=summary_writer, num_envs=args.n_envs, testing=True,
+                    logdir=log_dir, summary_writer=summary_writer, num_envs=args.n_envs, testing=True,
                     level_iterator=SafeLifeLevelIterator(
-                        test_levels, distinct_levels=n_levels, total_levels=-1)
+                        test_levels, distinct_levels=n_levels, total_levels=-1, seed=args.seed)
                     )
 
             aux_train_steps = 1e6
@@ -319,7 +312,7 @@ def main(args):
                         vae_epochs=50,
                         random_projection=aup_p,
                         aux_train_steps=aux_train_steps,
-                        logdir=data_dir,
+                        logdir=log_dir,
                         summary_writer=summary_writer,
                 )
                 aux_model.train()
@@ -329,7 +322,7 @@ def main(args):
                         training_envs=training_envs,
                         testing_envs=None,
                         z_dim=int(args.z),
-                        logdir=data_dir,
+                        logdir=log_dir,
                         aup_train_steps=aup_train_steps,
                         summary_writer=summary_writer)
                 aup_model.train()
@@ -345,7 +338,7 @@ def main(args):
                         model,
                         training_envs=training_envs,
                         testing_envs=testing_envs,
-                        logdir=data_dir,
+                        logdir=log_dir,
                         train_steps=ppo_train_steps,
                         summary_writer=summary_writer)
                 algo.train()
@@ -353,6 +346,7 @@ def main(args):
             elif args.algo == 'dqn':
                 from training.models import SafeLifeQNetwork
                 from training.dqn import DQN
+                dqn_train_steps = 6.0e6
 
                 obs_shape = training_envs[0].observation_space.shape
                 train_model = SafeLifeQNetwork(obs_shape)
@@ -361,7 +355,7 @@ def main(args):
                     train_model, target_model,
                     training_envs=training_envs,
                     testing_envs=testing_envs,
-                    logdir=subdir, summary_writer=summary_writer)
+                    logdir=log_dir, summary_writer=summary_writer)
                 algo.train(dqn_train_steps)
 
 
@@ -383,4 +377,6 @@ def main(args):
 
 if __name__ == "__main__":
     args = parser.parse_args()
+
+    set_seed(args.seed)
     main(args)

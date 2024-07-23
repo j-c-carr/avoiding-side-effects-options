@@ -81,9 +81,8 @@ def safelife_env_factory(
     envs = []
     for _ in range(num_envs):
         env = SafeLifeEnv(
-        #env = SafeLifeRGBEnv(
             level_iterator,
-            view_shape=(25,25),
+            view_shape=(25, 25),
             # This is a minor optimization, but a few of the output channels
             # are redundant or unused for normal safelife training levels.
             output_channels=(
