@@ -68,10 +68,10 @@ class PPO(object):
 
     @named_output('states actions rewards done policies values')
     def take_one_step(self, envs):
-        states = [
+        states = np.array([
             e.last_obs if hasattr(e, 'last_obs') else e.reset()
             for e in envs
-        ]
+        ])
         tensor_states = torch.tensor(states, device=self.compute_device, dtype=torch.float32)
         values_q, policies = self.model(tensor_states)
         values = values_q.mean(1)
@@ -127,7 +127,7 @@ class PPO(object):
         take_one_step = self.take_one_step
 
         steps = [take_one_step(self.training_envs) for _ in range(steps_per_env)] # [steps]
-        final_states = [e.last_obs for e in self.training_envs]
+        final_states = np.array([e.last_obs for e in self.training_envs])
         tensor_states = torch.tensor(
             final_states, device=self.compute_device, dtype=torch.float32)
         final_vals = model(tensor_states)[0]
