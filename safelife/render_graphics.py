@@ -11,7 +11,7 @@ from .helper_utils import recenter_view
 
 
 sprite_path = os.path.join(os.path.dirname(__file__), "sprites.png")
-sprite_sheet = imageio.imread(os.path.abspath(sprite_path)) / 255
+sprite_sheet = imageio.v2.imread(os.path.abspath(sprite_path), pilmode='RGBA') / 255
 SPRITE_SIZE = 14
 
 
