@@ -264,7 +264,7 @@ def main(args):
             if args.wandb:
                 from training.wandb_summary_writer import WandbSummaryWriter
                 assert args.project is not None, "Must include a project name"
-                summary_writer = WandbSummaryWriter(project=args.project, name=args.name, log_dir=log_dir)
+                summary_writer = WandbSummaryWriter(project=args.project, name=f'{args.name}_seed_{args.seed}', log_dir=log_dir)
             else:
                 summary_writer = SummaryWriter(log_dir)
 
